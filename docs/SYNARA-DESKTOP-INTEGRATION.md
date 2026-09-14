@@ -1,153 +1,140 @@
-# GitCortex Studio — Synara Desktop Shell Integration
+# GitCortex Studio — Studio Shell Integration (Synara / CORTEX)
 
-## Overview
+## Summary
 
-This document describes the integration of the **Synara** desktop shell into
-**GitCortex Studio** (a Code-OSS / VS Code fork). The goal is a single unified
-desktop application:
+GitCortex Studio integrates the **Synara / CORTEX desktop shell experience**
+into the existing Code-OSS / GitCortex foundation. The result is a single
+desktop application whose primary surface is the AI-native Studio workspace,
+while every Code-OSS engine is preserved.
 
-- **Visible shell**: adapted from the Synara desktop/application shell
-  (navigation, surfaces, split chat + VM).
-- **Underlying engine**: the Code-OSS / VS Code workbench (editor, languages,
-  syntax highlighting, IntelliSense, extensions, terminal, Git, worktrees,
-  Agent Host, debugger, QEMU/KVM, QMP, VNC/noVNC, webviews, packaging).
-- **Default experience**: the Studio shell is the primary surface. The
-  traditional VS Code workbench remains available through a secondary
-  "Developer Mode" space.
+Two source references were studied:
 
-This integration deliberately **excludes** the Synara marketing/landing web
-site, SEO pages, promotional assets, and any user or secret data.
+- **Synara Desktop** (`Emanuele-web04/synara`), MIT.
+- **CORTEX IDE** (`Frankenstein-Labs/CORTEX_IDE`), MIT — the Cortex rebranding
+  of the same lineage, which also ships the `CORTEX_IDE_AUDIT.md` /
+  `CORTEX_IDE_ROADMAP.md` architecture notes.
+
+Neither the Synara/Cortex marketing site, SEO pages, promotional assets, user
+data, nor secrets are imported.
 
 ## Architecture
 
 ```text
 GitCortex Studio
-└── Single desktop application (Electron main = Code-OSS/GitCortex)
-    ├── Studio Shell (renderer, workbench editor surface)
-    │   ├── Navigation rail (Chat, Virtual Machines, Sessions, Projects, MCP, Developer Mode)
-    │   ├── Chat surface (real IChatService + ChatWidget)
-    │   ├── VM surface (real IVirtualMachinesService + noVNC webview)
-    │   ├── Resizable chat-above-VM split (mouse + keyboard, persisted per workspace)
-    │   └── Secondary surfaces (sessions, projects, MCP overview, developer mode)
-    └── Code-OSS / GitCortex engines (unchanged, preserved)
+└── Single Electron application (Code-OSS/GitCortex main process)
+    ├── Studio Shell (renderer, editor surface)   <- Synara/Cortex experience
+    │   ├── Navigation rail: Chat · Files · Changes · Terminal · Git ·
+    │   │                    VM · Sessions · Projects · MCP · CORTEX · Developer
+    │   ├── Chat above Virtual Machine (resizable split)
+    │   └── Files / Changes / Terminal / Git / Sessions / Projects / MCP /
+    │        CORTEX / Developer surfaces
+    └── Code-OSS / GitCortex engines (unchanged)
         ├── editor, languages, IntelliSense, diagnostics
         ├── extensions + extension host
-        ├── terminal, Git, worktrees, diffs
-        ├── Agent Host
-        ├── debugger (developer mode)
+        ├── terminal, SCM/Git, worktrees, diffs
+        ├── Agent Host, chat, MCP management
+        ├── debugger (Developer Mode)
         ├── virtual machines: QEMU/KVM, QMP, VNC/noVNC private bridge
-        └── webview + Electron native lifecycle, packaging, updates, CSP
+        └── webview + Electron lifecycle, packaging, updates, CSP
 ```
 
-### Electron processes (unchanged)
+## What was integrated (real services, no mocks)
 
-Only one Electron main process exists: `src/vs/code/electron-main/main.ts`.
-No second Electron `main`, no second update system, no second VNC engine, and
-no unauthenticated public VNC TCP listener are introduced. The VM display path
-reuses the existing token-authenticated WebSocket bridge to the private Unix
-VNC socket through `IVirtualMachinesService.openDisplay()`.
+| Surface | Backed by |
+| --- | --- |
+| Chat | `IChatService` + `ChatWidget` (`ChatAgentLocation.Chat`) |
+| Virtual Machine | `IVirtualMachinesService` + existing noVNC webview bridge |
+| Files | `IFileService` (lazy directory tree) + `IOpenerService` |
+| Changes | `ISCMService` (live groups/resources) + `IOpenerService` |
+| Terminal | `ITerminalService` (`attachToElement`, `createTerminal`) |
+| Git | `ISCMService` repository state + existing Git commands |
+| Sessions | `IChatService.getLiveSessionItems()` / `acquireOrLoadSession` |
+| Projects | `IWorkspaceContextService` folders x chat sessions (grouping) |
+| MCP | `IWorkbenchMcpManagementService.getInstalled()` (name + transport only) |
+| CORTEX | roles catalogue + real `IChatService.isEnabled` readiness |
+| Developer Mode | `IWorkbenchLayoutService.setPartHidden` for classic parts |
 
-### IPC rules
+The VM path reuses the token-authenticated, CSP-protected loopback WebSocket
+bridge to the private Unix VNC socket. **No second QEMU engine and no public
+VNC listener** are introduced.
 
-- All Studio channels are namespaced `gitcortex.*` and registered centrally in
-  `src/vs/workbench/contrib/gitcortexStudioShell/common/ipcChannels.ts`.
+## CORTEX Engine readiness
+
+`common/studioSurfaces.ts` declares the canonical CORTEX agent roles
+(orchestrator, planner, architect, developer, researcher, tester, reviewer,
+security, debugger, devops, explorer). Only roles backed by a live capability
+are marked `available`; the CORTEX surface derives availability from the real
+`IChatService`, so an unimplemented role is *declared, never simulated*. The
+`CortexEngineStatus` bridge contract (`orchestration`, `orchestratorConnected`,
+`availableRoles`) is the interface a future CORTEX Engine fulfils without a
+shell redesign.
+
+## Security and IPC
+
+- Every Studio channel is namespaced `gitcortex.*` and registered centrally in
+  `common/ipcChannels.ts` (`window`, `workspace`, `project`, `chat`,
+  `terminal`, `git`, `vm`, `mcp`, `shell`, `agent`).
 - The renderer never receives `ipcRenderer`, `ipcMain`, Node.js, `fs`, or
-  `child_process`. The typed bridged `GitCortexDesktopBridge` contract in
-  `common/bridge.ts` is the only surface exposed.
-- Inputs are validated; responses are typed; long operations support
-  cancellation, structured errors, and listener cleanup.
+  `child_process`. `common/bridge.ts` is the only typed surface.
+- The MCP surface exposes only server name and transport kind - never the
+  command, URL, or any secret.
+- `isSafeRelativePath()` rejects traversal/absolute paths before any
+  workspace-relative path is displayed.
+- Files, changes and sessions are opened via `IOpenerService` / the chat
+  service, which apply the workbench's own trust/permission boundaries.
 
-## Ported / Adapted files
+## Files
 
-The Studio shell contribution lives under
-`src/vs/workbench/contrib/gitcortexStudioShell/`.
+New contribution:
+`src/vs/workbench/contrib/gitcortexStudioShell/`
 
 | File | Purpose |
 | --- | --- |
-| `common/ipcChannels.ts` | Central namespaced channel registry (`gitcortex.*`). |
-| `common/bridge.ts` | Typed desktop bridge contract (window/workspace/project/chat/terminal/git/vm/mcp/shell). |
-| `common/shellConfiguration.ts` | Configuration: startup editor, developer mode, chat-above-VM split, chat ratio. |
-| `common/splitView.ts` | Pure, testable split-view sizing logic (chat-above-VM). |
-| `browser/gitcortexStudioShell.ts` | The Studio shell editor pane: navigation rail, ChatWidget, VM console, resizable split, secondary surfaces. |
-| `browser/gitcortexStudioShellInput.ts` | Editor input for the shell. |
-| `browser/gitcortexStudioShell.contribution.ts` | Registers the editor pane + startup runner; starts the shell by default. |
-| `browser/media/gitcortexStudioShell.css` | Shell styling using VS Code theme variables. |
-| `test/common/splitView.test.ts` | Unit tests for split geometry/persistence. |
-| `test/common/ipcChannels.test.ts` | Unit tests for channel namespacing/validation. |
+| `common/ipcChannels.ts` | Namespaced channel registry + validator. |
+| `common/bridge.ts` | Typed bridge contract incl. `CortexEngineStatus`. |
+| `common/shellConfiguration.ts` | Startup surface, Developer Mode, split settings. |
+| `common/splitView.ts` | Pure chat-above-VM split logic. |
+| `common/studioSurfaces.ts` | Pure surface view-models (roles, MCP transport, git summary, project grouping, path safety, VM labels). |
+| `browser/gitcortexStudioShell.ts` | The shell pane: rail, chat, VM, split, all surfaces. |
+| `browser/gitcortexStudioShellInput.ts` | Editor input. |
+| `browser/gitcortexStudioShell.contribution.ts` | Pane registration + startup runner. |
+| `browser/media/gitcortexStudioShell.css` | Theme-token styling. |
+| `test/common/*.test.ts` | 23 unit tests. |
 
-## GitCortex files modified
-
-- `src/vs/workbench/workbench.common.main.ts` — imports the Studio shell
-  contribution.
-
-## Integration points (real services used)
-
-- **Chat**: `IChatService`, `ChatWidget` at `ChatAgentLocation.Chat` — a real
-  chat session, with model attachment and session listing through
-  `chatService.getLiveSessionItems()` / `acquireOrLoadSession()`.
-- **Virtual machines**: `IVirtualMachinesService`
-  (`getVirtualMachines()`, `onDidChangeVirtualMachines()`,
-  `start()`, `openDisplay()`) and the existing noVNC webview connection
-  (CSP-protected, token-authenticated, loopback only).
-- **Surfaces / navigation**: `IEditorService`, `ICommandService`,
-  `IConfigurationService`, `IWorkspaceContextService`, `IWorkbenchLayoutService`
-  (`setPartHidden` for Developer Mode), `IProductService`.
-- **MCP**: routed to the existing GitCortex MCP management surface (the
-  `github.copilot.mcp.openServersView` command) instead of executing MCP in the
-  renderer. No secrets are stored in the shell.
-- **Developer Mode**: classic workbench parts (activity bar, sidebar, panel,
-  auxiliary bar) are hidden while the shell is the primary surface and restored
-  when Developer Mode is enabled or the shell is closed.
-
-## Licenses and attribution
-
-This integration reuses architectural patterns and the shell concepts of the
-**Synara** desktop application, which is MIT-licensed:
-
-- Synara: https://github.com/Emanuele-web04/synara
-  - License: MIT
-  - Copyright (c) 2026 T3 Tools Inc.
-  - Copyright (c) 2026 Emanuele Di Pietro
-
-GitCortex Studio itself is a fork of Microsoft's Code-OSS / VS Code, MIT
-licensed, with attribution preserved in `LICENSE.txt` and
-`CODE-OSS-UPSTREAM.md`.
-
-No secrets, user data, credentials, private keys, tokens, or personal files
-from Synara are imported. The Synara marketing/landing web site is explicitly
-excluded.
+Modified: `src/vs/workbench/workbench.common.main.ts` (load the contribution),
+`build/lib/i18n.resources.json` (translation extraction).
 
 ## Tests
 
-Unit tests under `src/vs/workbench/contrib/gitcortexStudioShell/test/common/`
-cover:
+| Suite | Assertions |
+| --- | --- |
+| `studioSurfaces.test.ts` | 10 - roles, transport derivation, git summary, change totals, VM labels, project grouping, path safety |
+| `splitView.test.ts` | 8 - default/clamp/offset/height/snap/merge/serialize |
+| `ipcChannels.test.ts` | 5 - namespacing, documented areas, namespace coverage, rejection |
 
-- Split view sizing: default ratio, clamping, offset→ratio conversion,
-  height computation, snap detection, merge, serialize/deserialize (incl.
-  invalid input).
-- IPC channel registry: every registered channel is namespaced under
-  `gitcortex.`, the documented areas are present, and unknown/`vscode:`
-  channels are rejected.
-
-Existing virtual machine platform tests continue to pass
-(`out/vs/platform/virtualMachines/test/node/virtualMachines.test.js`).
+Verification: `tsc --noEmit` clean, `gulp compile` succeeds, ESLint and
+Stylelint clean, and a runtime smoke test (Xvfb + CDP) confirms 11 surfaces
+render, the Terminal surface hosts a live terminal, and the CORTEX surface
+reports real orchestration status.
 
 ## Build
 
 ```sh
 npm ci
-npm run gulp compile        # compiles client to out/
-npm run gulp vscode-linux-x64-min   # (optional) production Linux build
+npm run gulp compile                 # dev compile to out/
+npm run gulp vscode-linux-x64-min    # production Linux build
 ```
 
-## Disabling the Studio shell
+## Disable / rollback
 
-Set `gitcortex.shell.startupEditor` to `classic` (or the Developer Mode toggle
-in the shell) to keep the classic workbench as the primary surface.
+- Set `gitcortex.shell.startupEditor` to `classic`, or toggle Developer Mode in
+  the shell, to keep the classic workbench as the primary surface.
+- The shell is additive: removing the import in `workbench.common.main.ts` and
+  the `gitcortexStudioShell/` directory fully restores prior behavior without
+  touching any engine code.
 
-## Rollback
+## Licenses
 
-The Studio shell is an additive contribution. Removing the import from
-`src/vs/workbench/workbench.common.main.ts` (and the
-`gitcortexStudioShell/` directory) fully restores the prior classic workbench
-behavior without touching any engine code.
+- GitCortex Studio: MIT (Code-OSS/VS Code attribution in `LICENSE.txt`).
+- Synara / CORTEX: MIT (Copyright (c) 2026 T3 Tools Inc.; Copyright (c) 2026
+  Emanuele Di Pietro). No Synara/Cortex user data or secrets are imported.
