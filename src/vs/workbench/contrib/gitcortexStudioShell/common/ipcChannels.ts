@@ -77,6 +77,11 @@ export const GitCortexStudioShellIpcChannels = {
 		state: 'gitcortex.shell.state',
 		surfaceChanged: 'gitcortex.shell.surface-changed',
 	},
+
+	agent: {
+		getEngineStatus: 'gitcortex.agent.get-engine-status',
+		engineStatus: 'gitcortex.agent.engine-status',
+	},
 } as const;
 
 export type GitCortexStudioShellIpcChannel = (typeof GitCortexStudioShellIpcChannels)[keyof typeof GitCortexStudioShellIpcChannels] extends infer Nested

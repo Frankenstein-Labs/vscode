@@ -30,6 +30,21 @@ suite('GitCortex Studio Shell — IPC channel registry', () => {
 		assert.strictEqual(GitCortexStudioShellIpcChannels.vm.openDesktop, 'gitcortex.vm.open-desktop');
 		assert.strictEqual(GitCortexStudioShellIpcChannels.mcp.requestApproval, 'gitcortex.mcp.request-approval');
 		assert.strictEqual(GitCortexStudioShellIpcChannels.shell.toggleDeveloperMode, 'gitcortex.shell.toggle-developer-mode');
+		// CORTEX Engine readiness channels.
+		assert.strictEqual(GitCortexStudioShellIpcChannels.agent.getEngineStatus, 'gitcortex.agent.get-engine-status');
+		assert.strictEqual(GitCortexStudioShellIpcChannels.agent.engineStatus, 'gitcortex.agent.engine-status');
+	});
+
+	test('every documented namespace prefix is present', () => {
+		const covered = [
+			'gitcortex.window.', 'gitcortex.workspace.', 'gitcortex.project.', 'gitcortex.chat.',
+			'gitcortex.terminal.', 'gitcortex.git.', 'gitcortex.vm.', 'gitcortex.mcp.',
+			'gitcortex.shell.', 'gitcortex.agent.',
+		];
+		const flat = JSON.stringify(GitCortexStudioShellIpcChannels);
+		for (const prefix of covered) {
+			assert.ok(flat.includes(prefix), `registry must define at least one channel under ${prefix}`);
+		}
 	});
 
 	test('isGitCortexStudioShellChannel rejects unknown and vscode channels', () => {

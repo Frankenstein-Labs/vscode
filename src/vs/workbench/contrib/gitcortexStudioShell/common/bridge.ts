@@ -77,6 +77,21 @@ export interface GitCortexStudioShellState {
 	readonly developerMode: boolean;
 }
 
+/**
+ * CORTEX Engine readiness contract.
+ *
+ * This is a *contract*, not a fake engine: `availableRoles` reports only the
+ * roles backed by a live capability in this build, and `orchestratorConnected`
+ * reflects whether the integrated agent/chat surface is actually connected.
+ * A future CORTEX Engine implementation fulfils this interface without any
+ * shell redesign.
+ */
+export interface CortexEngineStatus {
+	readonly availableRoles: readonly string[];
+	readonly orchestration: 'unavailable' | 'available';
+	readonly orchestratorConnected: boolean;
+}
+
 export interface GitCortexDesktopBridge {
 	readonly window: {
 		minimize(): Promise<void>;
@@ -137,6 +152,11 @@ export interface GitCortexDesktopBridge {
 		toggleDeveloperMode(): Promise<GitCortexStudioShellState>;
 		getState(): Promise<GitCortexStudioShellState>;
 		onState(listener: (state: GitCortexStudioShellState) => void): () => void;
+	};
+
+	readonly cortex: {
+		getEngineStatus(): Promise<CortexEngineStatus>;
+		onEngineStatus(listener: (status: CortexEngineStatus) => void): () => void;
 	};
 }
 

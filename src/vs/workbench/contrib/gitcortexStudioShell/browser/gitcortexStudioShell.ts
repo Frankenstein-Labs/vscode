@@ -7,6 +7,7 @@ import './media/gitcortexStudioShell.css';
 import { $, addDisposableListener, append, clearNode, Dimension, getWindow, scheduleAtNextAnimationFrame } from '../../../../base/browser/dom.js';
 import { renderIcon } from '../../../../base/browser/ui/iconLabel/iconLabels.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { URI } from '../../../../base/common/uri.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
@@ -37,6 +38,12 @@ import { FileAccess } from '../../../../base/common/network.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { asWebviewUri, webviewGenericCspSource } from '../../webview/common/webview.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
+import { ISCMService } from '../../scm/common/scm.js';
+import { ITerminalService } from '../../terminal/browser/terminal.js';
+import { IWorkbenchMcpManagementService } from '../../../services/mcp/common/mcpWorkbenchManagementService.js';
+import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+import { CORTEX_AGENT_ROLES, formatGitSummary, mcpTransportOf, totalChanges, vmStateLabel, StudioChangeEntry } from '../common/studioSurfaces.js';
 import { GitCortexStudioShellInput, GitCortexStudioShellEditorOptions } from './gitcortexStudioShellInput.js';
 import { GitCortexShellConfiguration } from '../common/shellConfiguration.js';
 import { SplitViewState, chatHeightForState, clampChatRatio, deserializeSplitViewState, serializeSplitViewState, SPLIT_MAX_CHAT_RATIO, SPLIT_MIN_CHAT_RATIO } from '../common/splitView.js';
@@ -46,20 +53,30 @@ const SHELL_SPLIT_STATE_KEY = 'gitcortex.studioShell.splitState';
 const NAV_ITEM_ICONS: Record<ShellSurface, ThemeIcon> = {
 	chat: Codicon.commentDiscussion,
 	vm: Codicon.vm,
+	files: Codicon.files,
+	changes: Codicon.diffModified,
+	terminal: Codicon.terminal,
+	git: Codicon.gitBranch,
 	sessions: Codicon.history,
 	projects: Codicon.folderOpened,
 	mcp: Codicon.serverProcess,
+	cortex: Codicon.organization,
 	developer: Codicon.extensions,
 };
 
-type ShellSurface = 'chat' | 'vm' | 'sessions' | 'projects' | 'mcp' | 'developer';
+type ShellSurface = 'chat' | 'vm' | 'files' | 'changes' | 'terminal' | 'git' | 'sessions' | 'projects' | 'mcp' | 'cortex' | 'developer';
 
 const SURFACE_LABELS: Record<ShellSurface, string> = {
 	chat: localize('gitcortex.shell.surface.chat', "Chat"),
 	vm: localize('gitcortex.shell.surface.vm', "Machines virtuelles"),
+	files: localize('gitcortex.shell.surface.files', "Fichiers"),
+	changes: localize('gitcortex.shell.surface.changes', "Changements"),
+	terminal: localize('gitcortex.shell.surface.terminal', "Terminal"),
+	git: localize('gitcortex.shell.surface.git', "Git"),
 	sessions: localize('gitcortex.shell.surface.sessions', "Sessions"),
 	projects: localize('gitcortex.shell.surface.projects', "Projets"),
 	mcp: localize('gitcortex.shell.surface.mcp', "MCP"),
+	cortex: localize('gitcortex.shell.surface.cortex', "CORTEX"),
 	developer: localize('gitcortex.shell.surface.developer', "Mode développeur"),
 };
 
@@ -99,6 +116,11 @@ export class GitCortexStudioShellPage extends EditorPane {
 		@IVirtualMachinesService private readonly virtualMachinesService: IVirtualMachinesService,
 		@IWebviewService private readonly webviewService: IWebviewService,
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
+		@IFileService private readonly fileService: IFileService,
+		@ISCMService private readonly scmService: ISCMService,
+		@ITerminalService private readonly terminalService: ITerminalService,
+		@IWorkbenchMcpManagementService private readonly mcpManagementService: IWorkbenchMcpManagementService,
+		@IOpenerService private readonly openerService: IOpenerService,
 	) {
 		super(GitCortexStudioShellPage.ID, group, telemetryService, themeService, storageService);
 
@@ -180,10 +202,15 @@ export class GitCortexStudioShellPage extends EditorPane {
 
 		const items: { id: ShellSurface; label: string }[] = [
 			{ id: 'chat', label: SURFACE_LABELS.chat },
+			{ id: 'files', label: SURFACE_LABELS.files },
+			{ id: 'changes', label: SURFACE_LABELS.changes },
+			{ id: 'terminal', label: SURFACE_LABELS.terminal },
+			{ id: 'git', label: SURFACE_LABELS.git },
 			{ id: 'vm', label: SURFACE_LABELS.vm },
 			{ id: 'sessions', label: SURFACE_LABELS.sessions },
 			{ id: 'projects', label: SURFACE_LABELS.projects },
 			{ id: 'mcp', label: SURFACE_LABELS.mcp },
+			{ id: 'cortex', label: SURFACE_LABELS.cortex },
 			{ id: 'developer', label: SURFACE_LABELS.developer },
 		];
 
@@ -393,8 +420,9 @@ export class GitCortexStudioShellPage extends EditorPane {
 
 		const header = append(this.vmSurface, $('.gitcortex-studio-shell-vm-header'));
 		append(header, $('span.gitcortex-studio-shell-vm-title', {}, running?.name ?? starting?.name ?? stopped?.name ?? ''));
-		const stateLabel = append(header, $('span.gitcortex-studio-shell-vm-state', {}, running?.state ?? starting?.state ?? stopped?.state ?? ''));
-		stateLabel.classList.add(`state-${running?.state ?? starting?.state ?? stopped?.state ?? 'stopped'}`);
+		const currentState = running?.state ?? starting?.state ?? stopped?.state ?? 'stopped';
+		const stateLabel = append(header, $('span.gitcortex-studio-shell-vm-state', {}, vmStateLabel(currentState)));
+		stateLabel.classList.add(`state-${currentState}`);
 
 		const body = append(this.vmSurface, $('.gitcortex-studio-shell-vm-body'));
 
@@ -504,14 +532,16 @@ export class GitCortexStudioShellPage extends EditorPane {
 
 	private renderSingleSurface(surface: ShellSurface): void {
 		clearNode(this.contentContainer);
-		if (surface === 'projects') {
-			this.renderProjectsSurface();
-		} else if (surface === 'sessions') {
-			this.renderSessionsSurface();
-		} else if (surface === 'mcp') {
-			this.renderMcpSurface();
-		} else if (surface === 'developer') {
-			this.renderDeveloperSurface();
+		switch (surface) {
+			case 'files': this.renderFilesSurface(); break;
+			case 'changes': this.renderChangesSurface(); break;
+			case 'terminal': this.renderTerminalSurface(); break;
+			case 'git': this.renderGitSurface(); break;
+			case 'sessions': this.renderSessionsSurface(); break;
+			case 'projects': this.renderProjectsSurface(); break;
+			case 'mcp': this.renderMcpSurface(); break;
+			case 'cortex': this.renderCortexSurface(); break;
+			case 'developer': this.renderDeveloperSurface(); break;
 		}
 	}
 
@@ -533,6 +563,200 @@ export class GitCortexStudioShellPage extends EditorPane {
 		const workspace = this.workspaceContextService.getWorkspace();
 		if (workspace && workspace.folders.length > 0) {
 			append(section, $('.gitcortex-studio-shell-current-workspace', {}, workspace.folders.map(f => f.name).join(', ')));
+		}
+	}
+
+	private renderFilesSurface(): void {
+		const section = this.section();
+		append(section, $('h2.gitcortex-studio-shell-section-title', {}, SURFACE_LABELS.files));
+
+		const workspace = this.workspaceContextService.getWorkspace();
+		if (!workspace || workspace.folders.length === 0) {
+			append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.files.noWorkspace', "Ouvrez un dossier pour parcourir ses fichiers.")));
+			const openFolder = append(section, $('button.gitcortex-studio-shell-command-button'));
+			openFolder.textContent = localize('gitcortex.shell.openFolder', "Ouvrir un dossier");
+			this.contentDisposables.add(addDisposableListener(openFolder, 'click', () => void this.commandService.executeCommand('workbench.action.files.openFolder')));
+			return;
+		}
+
+		const roots = append(section, $('.gitcortex-studio-shell-file-roots'));
+		for (const folder of workspace.folders) {
+			this.renderFileTreeNode(roots, folder.uri, folder.name, 0);
+		}
+	}
+
+	/**
+	 * Render one lazily-expanded directory node using the real IFileService.
+	 */
+	private renderFileTreeNode(container: HTMLElement, uri: URI, name: string, depth: number): void {
+		const row = append(container, $('button.gitcortex-studio-shell-file-row'));
+		row.style.paddingLeft = `${depth * 12 + 8}px`;
+		row.appendChild(renderIcon(Codicon.chevronRight));
+		append(row, $('span.gitcortex-studio-shell-file-name', {}, name));
+
+		let expanded = false;
+		let childContainer: HTMLElement | undefined;
+		this.contentDisposables.add(addDisposableListener(row, 'click', async () => {
+			expanded = !expanded;
+			if (!expanded) {
+				childContainer?.remove();
+				childContainer = undefined;
+				return;
+			}
+			childContainer = append(container, $('.gitcortex-studio-shell-file-children'));
+			try {
+				const stat = await this.fileService.resolve(uri);
+				const children = [...(stat.children ?? [])].sort((a, b) => {
+					if (a.isDirectory !== b.isDirectory) {
+						return a.isDirectory ? -1 : 1;
+					}
+					return a.name.localeCompare(b.name);
+				});
+				for (const child of children) {
+					if (child.isDirectory) {
+						this.renderFileTreeNode(childContainer, child.resource, child.name, depth + 1);
+					} else {
+						const fileRow = append(childContainer, $('button.gitcortex-studio-shell-file-row.file'));
+						fileRow.style.paddingLeft = `${(depth + 1) * 12 + 8}px`;
+						append(fileRow, $('span.gitcortex-studio-shell-file-name', {}, child.name));
+						this.contentDisposables.add(addDisposableListener(fileRow, 'click', () => {
+							void this.openerService.open(child.resource, { openExternal: false });
+						}));
+					}
+				}
+			} catch {
+				append(childContainer, $('.gitcortex-studio-shell-vm-message', {}, localize('gitcortex.shell.files.unreadable', "Dossier illisible.")));
+			}
+		}));
+	}
+
+	private renderChangesSurface(): void {
+		const section = this.section();
+		append(section, $('h2.gitcortex-studio-shell-section-title', {}, SURFACE_LABELS.changes));
+
+		const repositories = Array.from(this.scmService.repositories);
+		if (repositories.length === 0) {
+			append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.changes.empty', "Aucun dépôt source détecté dans ce workspace.")));
+			return;
+		}
+
+		const list = append(section, $('.gitcortex-studio-shell-change-list'));
+		const summaries: { provider: string; repository: string; changes: number }[] = [];
+		for (const repo of repositories) {
+			const provider = repo.provider;
+			let repoChanges = 0;
+			for (const group of provider.groups) {
+				for (const resource of group.resources) {
+					repoChanges++;
+					const entry: StudioChangeEntry = {
+						resource: resource.sourceUri.toString(),
+						name: resource.sourceUri.path.split('/').pop() ?? resource.sourceUri.path,
+						group: group.label,
+						provider: provider.id,
+					};
+					const row = append(list, $('button.gitcortex-studio-shell-change-row'));
+					row.appendChild(renderIcon(Codicon.diffModified));
+					append(row, $('span.gitcortex-studio-shell-change-name', {}, entry.name));
+					append(row, $('span.gitcortex-studio-shell-change-group', {}, entry.group));
+					this.contentDisposables.add(addDisposableListener(row, 'click', () => {
+						void this.openerService.open(resource.sourceUri, { openExternal: false });
+					}));
+				}
+			}
+			summaries.push({ provider: provider.id, repository: provider.name || provider.label, changes: repoChanges });
+		}
+		const total = totalChanges(summaries);
+		if (total === 0) {
+			append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.changes.clean', "Aucun changement en attente.")));
+		} else {
+			append(section, $('.gitcortex-studio-shell-change-total', {}, localize('gitcortex.shell.changes.total', "{0} changement(s)", total)));
+		}
+	}
+
+	private renderTerminalSurface(): void {
+		const section = this.section();
+		append(section, $('h2.gitcortex-studio-shell-section-title', {}, SURFACE_LABELS.terminal));
+
+		const host = append(section, $('.gitcortex-studio-shell-terminal-host'));
+		const instances = this.terminalService.instances;
+		const existing = instances.length > 0 ? instances[instances.length - 1] : undefined;
+
+		if (existing) {
+			try {
+				existing.attachToElement(host);
+				host.tabIndex = 0;
+			} catch {
+				append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.terminal.attachFailed', "Le terminal ne peut pas être affiché ici.")));
+			}
+		} else {
+			append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.terminal.empty', "Aucun terminal. Créez-en un pour exécuter des commandes.")));
+		}
+
+		const create = append(section, $('button.gitcortex-studio-shell-command-button'));
+		create.textContent = localize('gitcortex.shell.terminal.create', "Nouveau terminal");
+		this.contentDisposables.add(addDisposableListener(create, 'click', () => {
+			void this.terminalService.createTerminal().then(() => this.setSurface('terminal'));
+		}));
+	}
+
+	private renderGitSurface(): void {
+		const section = this.section();
+		append(section, $('h2.gitcortex-studio-shell-section-title', {}, SURFACE_LABELS.git));
+
+		const repositories = Array.from(this.scmService.repositories);
+		if (repositories.length === 0) {
+			append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.git.empty', "Aucun dépôt Git détecté.")));
+			const clone = append(section, $('button.gitcortex-studio-shell-command-button'));
+			clone.textContent = localize('gitcortex.shell.git.clone', "Cloner un dépôt");
+			this.contentDisposables.add(addDisposableListener(clone, 'click', () => void this.commandService.executeCommand('git.clone')));
+			return;
+		}
+
+		const summary = append(section, $('.gitcortex-studio-shell-git-summary'));
+		for (const repo of repositories) {
+			let changes = 0;
+			let untracked = 0;
+			for (const group of repo.provider.groups) {
+				if (group.id.toLowerCase().includes('untracked')) {
+					untracked += group.resources.length;
+				} else {
+					changes += group.resources.length;
+				}
+			}
+			append(summary, $('.gitcortex-studio-shell-git-repo', {}, repo.provider.name || repo.provider.label));
+			append(summary, $('.gitcortex-studio-shell-git-state', {}, formatGitSummary({ branch: '', ahead: 0, behind: 0, changes, untracked })));
+		}
+
+		const actions = append(section, $('.gitcortex-studio-shell-git-actions'));
+		const commands: [string, string][] = [
+			[localize('gitcortex.shell.git.commit', "Valider"), 'git.commit'],
+			[localize('gitcortex.shell.git.pull', "Tirer"), 'git.pull'],
+			[localize('gitcortex.shell.git.push', "Pousser"), 'git.push'],
+			[localize('gitcortex.shell.git.branch', "Branche"), 'git.branch'],
+		];
+		for (const [label, command] of commands) {
+			const button = append(actions, $('button.gitcortex-studio-shell-command-button'));
+			button.textContent = label;
+			this.contentDisposables.add(addDisposableListener(button, 'click', () => void this.commandService.executeCommand(command)));
+		}
+	}
+
+	private renderCortexSurface(): void {
+		const section = this.section();
+		append(section, $('h2.gitcortex-studio-shell-section-title', {}, SURFACE_LABELS.cortex));
+
+		const status = this.getCortexEngineStatus();
+		append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.cortex.status', "Orchestration : {0} · orchestrateur connecté : {1}", status.orchestration, status.orchestratorConnected ? 'oui' : 'non')));
+		append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.cortex.hint', "CORTEX Engine : rôles d'agents déclarés. Seuls les rôles marqués disponibles sont adossés à une capacité réelle dans cette version ; les autres sont préparés pour l'orchestration future et ne sont pas simulés.")));
+
+		const list = append(section, $('.gitcortex-studio-shell-cortex-roles'));
+		for (const role of CORTEX_AGENT_ROLES) {
+			const available = status.availableRoles.includes(role.id);
+			const row = append(list, $('div.gitcortex-studio-shell-cortex-role'));
+			row.classList.toggle('available', available);
+			row.appendChild(renderIcon(available ? Codicon.check : Codicon.circleOutline));
+			append(row, $('span.gitcortex-studio-shell-cortex-role-label', {}, role.label));
+			append(row, $('span.gitcortex-studio-shell-cortex-role-desc', {}, role.description));
 		}
 	}
 
@@ -566,12 +790,47 @@ export class GitCortexStudioShellPage extends EditorPane {
 	private renderMcpSurface(): void {
 		const section = this.section();
 		append(section, $('h2.gitcortex-studio-shell-section-title', {}, SURFACE_LABELS.mcp));
-		append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.mcp.hint', "Les serveurs MCP sont gérés de façon centralisée par GitCortex. Utilisez la vue MCP du panneau pour configurer, autoriser et surveiller les serveurs, avec approbation explicite des actions sensibles.")));
+		append(section, $('p.gitcortex-studio-shell-hint', {}, localize('gitcortex.shell.mcp.hint', "Les serveurs MCP sont gérés de façon centralisée par GitCortex. Seuls le nom, l'état et le transport sont affichés ; aucun secret, commande ou URL n'est exposé ici.")));
+
+		const list = append(section, $('.gitcortex-studio-shell-mcp-list'));
+		void this.mcpManagementService.getInstalled().then(servers => {
+			if (servers.length === 0) {
+				append(list, $('.gitcortex-studio-shell-vm-message', {}, localize('gitcortex.shell.mcp.none', "Aucun serveur MCP configuré.")));
+				return;
+			}
+			for (const server of servers) {
+				const row = append(list, $('div.gitcortex-studio-shell-mcp-row'));
+				row.appendChild(renderIcon(Codicon.serverProcess));
+				append(row, $('span.gitcortex-studio-shell-mcp-name', {}, server.displayName || server.name));
+				append(row, $('span.gitcortex-studio-shell-mcp-transport', {}, mcpTransportOf(server.config as { type?: string; command?: string; url?: string })));
+			}
+		}).catch(() => {
+			append(list, $('.gitcortex-studio-shell-vm-message', {}, localize('gitcortex.shell.mcp.unavailable', "La liste MCP n'est pas disponible.")));
+		});
+
 		const openMcp = append(section, $('button.gitcortex-studio-shell-command-button'));
 		openMcp.textContent = localize('gitcortex.shell.mcp.open', "Ouvrir les serveurs MCP");
 		this.contentDisposables.add(addDisposableListener(openMcp, 'click', () => {
 			void this.commandService.executeCommand('github.copilot.mcp.openServersView');
 		}));
+	}
+
+	/**
+	 * CORTEX Engine readiness.
+	 *
+	 * Reports the roles backed by a live capability in this build. The
+	 * orchestrator/developer/reviewer/planner roles are backed by the
+	 * integrated agent chat surface; availability is derived from the real
+	 * `IChatService` state rather than hard-coded.
+	 */
+	private getCortexEngineStatus(): import('../common/bridge.js').CortexEngineStatus {
+		const chatAvailable = this.chatService.isEnabled(ChatAgentLocation.Chat);
+		const availableRoles = CORTEX_AGENT_ROLES.filter(role => role.available && (chatAvailable || role.id === 'reviewer')).map(role => role.id);
+		return {
+			availableRoles,
+			orchestration: chatAvailable ? 'available' : 'unavailable',
+			orchestratorConnected: chatAvailable,
+		};
 	}
 
 	private renderDeveloperSurface(): void {
