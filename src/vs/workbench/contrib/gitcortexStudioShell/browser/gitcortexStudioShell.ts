@@ -43,7 +43,7 @@ import { ISCMService } from '../../scm/common/scm.js';
 import { ITerminalService } from '../../terminal/browser/terminal.js';
 import { IWorkbenchMcpManagementService } from '../../../services/mcp/common/mcpWorkbenchManagementService.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
-import { CORTEX_AGENT_ROLES, formatGitSummary, mcpTransportOf, totalChanges, vmStateLabel, StudioChangeEntry } from '../common/studioSurfaces.js';
+import { CORTEX_AGENT_ROLES, formatGitSummary, groupSessionsIntoProjects, mcpTransportOf, totalChanges, vmStateLabel, StudioChangeEntry } from '../common/studioSurfaces.js';
 import { GitCortexStudioShellInput, GitCortexStudioShellEditorOptions } from './gitcortexStudioShellInput.js';
 import { GitCortexShellConfiguration } from '../common/shellConfiguration.js';
 import { SplitViewState, chatHeightForState, clampChatRatio, deserializeSplitViewState, serializeSplitViewState, SPLIT_MAX_CHAT_RATIO, SPLIT_MIN_CHAT_RATIO } from '../common/splitView.js';
@@ -561,8 +561,43 @@ export class GitCortexStudioShellPage extends EditorPane {
 		}));
 
 		const workspace = this.workspaceContextService.getWorkspace();
-		if (workspace && workspace.folders.length > 0) {
-			append(section, $('.gitcortex-studio-shell-current-workspace', {}, workspace.folders.map(f => f.name).join(', ')));
+		const roots = (workspace?.folders ?? []).map(f => ({ resource: f.uri.toString(), name: f.name }));
+		const list = append(section, $('.gitcortex-studio-shell-project-list'));
+
+		void this.chatService.getLiveSessionItems().then(items => {
+			const sessions = items.map(item => ({
+				resource: item.sessionResource.toString(),
+				title: item.title || item.sessionResource.path,
+				isActive: item.isActive,
+				workingDirectory: item.workingDirectory?.toString(),
+			}));
+			const projects = groupSessionsIntoProjects(roots, sessions);
+			for (const project of projects) {
+				const card = append(list, $('.gitcortex-studio-shell-project-card'));
+				const header = append(card, $('.gitcortex-studio-shell-project-header'));
+				header.appendChild(renderIcon(Codicon.folderOpened));
+				append(header, $('span.gitcortex-studio-shell-project-name', {}, project.name));
+				append(header, $('span.gitcortex-studio-shell-project-count', {}, localize('gitcortex.shell.projects.sessionCount', "{0} session(s)", project.sessions.length)));
+
+				for (const session of project.sessions) {
+					const row = append(card, $('button.gitcortex-studio-shell-session-row'));
+					row.classList.toggle('active', session.isActive);
+					row.textContent = session.title;
+					this.contentDisposables.add(addDisposableListener(row, 'click', () => {
+						void this.openSessionByResource(session.resource);
+					}));
+				}
+			}
+		}).catch(() => {
+			append(list, $('.gitcortex-studio-shell-vm-message', {}, localize('gitcortex.shell.projects.unavailable', "Les projets ne sont pas disponibles.")));
+		});
+	}
+
+	private async openSessionByResource(resource: string): Promise<void> {
+		const ref = await this.chatService.acquireOrLoadSession(URI.parse(resource), ChatAgentLocation.Chat, CancellationToken.None);
+		if (ref) {
+			this.setSurface('chat');
+			this.chatWidget?.setModel(ref.object);
 		}
 	}
 
@@ -772,16 +807,9 @@ export class GitCortexStudioShellPage extends EditorPane {
 			for (const item of items) {
 				const row = append(list, $('button.gitcortex-studio-shell-session-row'));
 				row.textContent = item.title || item.sessionResource.path;
+				row.classList.toggle('active', item.isActive);
 				this.contentDisposables.add(addDisposableListener(row, 'click', () => {
-					this.chatService.acquireOrLoadSession(item.sessionResource, ChatAgentLocation.Chat, CancellationToken.None)
-						.then(ref => {
-							if (ref) {
-								this.setSurface('chat');
-								if (this.chatWidget) {
-									this.chatWidget.setModel(ref.object);
-								}
-							}
-						});
+					void this.openSessionByResource(item.sessionResource.toString());
 				}));
 			}
 		});

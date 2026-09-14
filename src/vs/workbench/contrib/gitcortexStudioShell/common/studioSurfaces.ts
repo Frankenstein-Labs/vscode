@@ -146,3 +146,74 @@ export function vmStateLabel(state: string): string {
 		default: return state;
 	}
 }
+
+/**
+ * A Cortex-style workspace project: a workspace root that groups the agent
+ * sessions working inside it. Derived from the real workspace folders and the
+ * real chat session list, not from invented data.
+ */
+export interface StudioProject {
+	/** uri.toString() of the workspace root. */
+	readonly resource: string;
+	readonly name: string;
+	readonly sessions: readonly { resource: string; title: string; isActive: boolean }[];
+}
+
+/** Minimal shape of a chat session needed to group it by workspace. */
+export interface StudioProjectSessionInput {
+	readonly resource: string;
+	readonly title: string;
+	readonly isActive: boolean;
+	/** Optional working directory URI string reported by the chat session. */
+	readonly workingDirectory?: string;
+}
+
+/**
+ * Group agent sessions under workspace projects. A session with no working
+ * directory (or one outside every root) is attached to the first project so
+ * nothing is silently dropped; with no projects at all, the sessions are
+ * returned as a single synthetic "Workspace" project.
+ */
+export function groupSessionsIntoProjects(
+	workspaceRoots: readonly { readonly resource: string; readonly name: string }[],
+	sessions: readonly StudioProjectSessionInput[],
+): readonly StudioProject[] {
+	if (workspaceRoots.length === 0) {
+		return [{
+			resource: '',
+			name: 'Workspace',
+			sessions: sessions.map(s => ({ resource: s.resource, title: s.title, isActive: s.isActive })),
+		}];
+	}
+
+	const buckets = new Map<string, { resource: string; title: string; isActive: boolean }[]>();
+	for (const root of workspaceRoots) {
+		buckets.set(root.resource, []);
+	}
+
+	for (const session of sessions) {
+		const owner = workspaceRoots.find(root => session.workingDirectory && session.workingDirectory.startsWith(root.resource));
+		const target = owner?.resource ?? workspaceRoots[0].resource;
+		buckets.get(target)?.push({ resource: session.resource, title: session.title, isActive: session.isActive });
+	}
+
+	return workspaceRoots.map(root => ({
+		resource: root.resource,
+		name: root.name,
+		sessions: buckets.get(root.resource) ?? [],
+	}));
+}
+
+/**
+ * A workspace-relative file path safe to display: rejects traversal segments so
+ * a crafted name cannot imply access outside the workspace.
+ */
+export function isSafeRelativePath(path: string): boolean {
+	if (!path) {
+		return false;
+	}
+	if (path.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(path)) {
+		return false;
+	}
+	return !path.split(/[\\/]+/).some(segment => segment === '..');
+}

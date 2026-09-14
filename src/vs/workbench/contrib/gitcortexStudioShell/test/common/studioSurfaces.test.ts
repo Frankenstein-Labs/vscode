@@ -9,6 +9,8 @@ import {
 	CORTEX_AGENT_ROLES,
 	availableCortexRoles,
 	formatGitSummary,
+	groupSessionsIntoProjects,
+	isSafeRelativePath,
 	mcpTransportOf,
 	totalChanges,
 	vmStateLabel,
@@ -66,5 +68,39 @@ suite('GitCortex Studio Shell — surface view-models', () => {
 		assert.strictEqual(vmStateLabel('running'), 'En cours');
 		assert.strictEqual(vmStateLabel('error'), 'Erreur');
 		assert.strictEqual(vmStateLabel('mystery'), 'mystery');
+	});
+
+	test('groupSessionsIntoProjects groups sessions by workspace root', () => {
+		const roots = [
+			{ resource: 'file:///a', name: 'a' },
+			{ resource: 'file:///b', name: 'b' },
+		];
+		const projects = groupSessionsIntoProjects(roots, [
+			{ resource: 's1', title: 'one', isActive: true, workingDirectory: 'file:///a/sub' },
+			{ resource: 's2', title: 'two', isActive: false, workingDirectory: 'file:///b' },
+			{ resource: 's3', title: 'three', isActive: false },
+		]);
+		assert.strictEqual(projects.length, 2);
+		assert.strictEqual(projects[0].name, 'a');
+		assert.deepStrictEqual(projects[0].sessions.map(s => s.resource), ['s1', 's3']);
+		assert.deepStrictEqual(projects[1].sessions.map(s => s.resource), ['s2']);
+	});
+
+	test('groupSessionsIntoProjects creates a synthetic workspace when there are no roots', () => {
+		const projects = groupSessionsIntoProjects([], [
+			{ resource: 's1', title: 'one', isActive: false },
+		]);
+		assert.strictEqual(projects.length, 1);
+		assert.strictEqual(projects[0].name, 'Workspace');
+		assert.strictEqual(projects[0].sessions.length, 1);
+	});
+
+	test('isSafeRelativePath rejects traversal and absolute paths', () => {
+		assert.strictEqual(isSafeRelativePath('src/app.ts'), true);
+		assert.strictEqual(isSafeRelativePath('../etc/passwd'), false);
+		assert.strictEqual(isSafeRelativePath('a/../../b'), false);
+		assert.strictEqual(isSafeRelativePath('/etc/passwd'), false);
+		assert.strictEqual(isSafeRelativePath('C:\\Windows\\system32'), false);
+		assert.strictEqual(isSafeRelativePath(''), false);
 	});
 });

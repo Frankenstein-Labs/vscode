@@ -243,6 +243,45 @@
 	background: var(--vscode-list-hoverBackground);
 }
 
+.gitcortex-studio-shell-session-row.active {
+	background: var(--vscode-list-activeSelectionBackground);
+	color: var(--vscode-list-activeSelectionForeground);
+}
+
+/* Projects surface */
+.gitcortex-studio-shell-project-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--vscode-spacing-size120);
+	max-width: 720px;
+}
+
+.gitcortex-studio-shell-project-card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--vscode-spacing-size40);
+	padding: var(--vscode-spacing-size100);
+	border: var(--vscode-strokeThickness) solid var(--vscode-widget-border);
+	border-radius: var(--vscode-cornerRadius-medium);
+}
+
+.gitcortex-studio-shell-project-header {
+	display: flex;
+	align-items: center;
+	gap: var(--vscode-spacing-size80);
+	margin-bottom: var(--vscode-spacing-size40);
+}
+
+.gitcortex-studio-shell-project-name {
+	font-weight: var(--vscode-fontWeight-semiBold);
+}
+
+.gitcortex-studio-shell-project-count {
+	margin-left: auto;
+	font-size: var(--vscode-fontSize-label3);
+	color: var(--vscode-descriptionForeground);
+}
+
 /* Files surface */
 .gitcortex-studio-shell-file-roots {
 	display: flex;
